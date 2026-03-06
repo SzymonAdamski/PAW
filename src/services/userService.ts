@@ -30,4 +30,21 @@ export class UserService {
     getCurrentUser(): User {
         return this.users as User;
     }
+    updateCurrentUser(data: Partial<Omit<User, 'id'>>): User {
+        const updated: User = {
+            ...this.getCurrentUser(),
+            firstName: data.firstName !== undefined ? data.firstName.trim() : this.users!.firstName,
+            lastName: data.lastName !== undefined ? data.lastName.trim() : this.users!.lastName,
+            email: data.email !== undefined ? data.email.trim() : this.users!.email,
+        };
+        api.setItem(updated);
+        this.users = updated;
+        return updated;
+    }
+    clear(): void {
+        api.removeItem();
+        this.users = null;
+    }
 }
+
+export const userService = new UserService();

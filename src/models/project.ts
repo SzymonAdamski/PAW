@@ -1,51 +1,53 @@
 import { v4 as uuid } from 'uuid';
-import type { CreateProjectDto, Project, UpdateProjectDto } from '../types/index';
+import type { Project, CreateProjectDTO, UpdateProjectDTO } from '../types';
 
-export class ProjectModel {
-  // Tworzy nowy, kompletny obiekt Project z danych wejściowych
-  static create(data: CreateProjectDto): Project {
-    const now = new Date().toISOString();
-
-    return {
-      id: uuid(),
-      name: data.name.trim(),
-      description: data.description.trim(),
-      author: data.author.trim(),
-      createdAt: now,
-      updatedAt: now,
-    };
-  }
-
-  // Tworzy zaktualizowaną wersję projektu (immutable update)
-  static update(current: Project, data: UpdateProjectDto): Project {
-    return {
-      ...current,
-      name: data.name !== undefined ? data.name.trim() : current.name,
-      description:
-        data.description !== undefined
-          ? data.description.trim()
-          : current.description,
-      author: data.author !== undefined ? data.author.trim() : current.author,
-      updatedAt: new Date().toISOString(),
-    };
-  }
-
-  // Centralna walidacja reguł biznesowych
-  static validate(data: Partial<CreateProjectDto>): string[] {
-    const errors: string[] = [];
-
-    if (!data.name || data.name.trim().length < 3) {
-      errors.push('Nazwa musi miec co najmniej 3 znaki.');
+export class ProjectModel{
+    static create(data: CreateProjectDTO): Project {
+        const now = new Date().toISOString();
+        return {
+            id: uuid(),
+            name: data.name.trim(),
+            description: data.description.trim(),
+            author: data.author.trim(),
+            createdAt: now,
+            updatedAt: now,
+        };
     }
-
-    if (!data.description || data.description.trim().length < 5) {
-      errors.push('Opis musi miec co najmniej 5 znakow.');
+    static update(current: Project, data: UpdateProjectDTO): Project {
+      return {
+        ...current,
+        name: data.name !== undefined ? data.name.trim() : current.name,
+        description:
+        data.description !== undefined 
+        ? data.description.trim() 
+        : current.description,
+        updatedAt: new Date().toISOString(),
+        };
     }
+    static validateCreate(data: Partial<CreateProjectDTO>): string[] {
+        const errors: string[] = [];
 
-    if (!data.author || data.author.trim().length < 2) {
-      errors.push('Autor musi miec co najmniej 2 znaki.');
+        if (!data.name || data.name.trim().length < 3) {
+            errors.push("Nazwa projektu musi mieć co najmniej 3 znaki.");
+        }
+        if (!data.description || data.description.trim().length < 10) {
+            errors.push("Opis projektu musi mieć co najmniej 10 znaków.");
+        }
+        if (!data.author || data.author.trim().length < 2) {
+            errors.push("Autor projektu musi mieć co najmniej 2 znaki.");
+        }
+        return errors;
     }
+    static validateUpdate(data: Partial<UpdateProjectDTO>): string[] {
+        const errors: string[] = [];
 
-    return errors;
-  }
-}
+        if (data.name !== undefined && data.name.trim().length < 3) {
+            errors.push("Nazwa projektu musi mieć co najmniej 3 znaki.");
+        }
+
+        if (data.description !== undefined && data.description.trim().length < 10) {
+            errors.push("Opis projektu musi mieć co najmniej 10 znaków.");
+        }
+        return errors;
+    }
+}  
