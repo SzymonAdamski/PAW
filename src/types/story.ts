@@ -1,5 +1,5 @@
 export type StoryPriority = 'low' | 'medium' | 'high';
-export type StoryStatus = 'todo' | 'in-progress' | 'done';
+export type StoryStatus = 'todo' | 'doing' | 'done';
 
 export interface Story {
     id: string;

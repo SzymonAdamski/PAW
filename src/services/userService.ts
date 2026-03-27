@@ -18,7 +18,12 @@ export class UserService {
         const existing = api.getItem();
 
         if (existing) {
-            return existing;
+            const normalized: User = {
+                ...existing,
+                role: 'admin',
+            };
+            api.setItem(normalized);
+            return normalized;
         }
         const mockUser: User = {
             id: uuidv4(),
@@ -34,31 +39,38 @@ export class UserService {
 
     private loadOrCreateUsersList(): User[] {
         const existing = listApi.getAll();
-        if (Array.isArray(existing) && existing.length > 0) {
-            return existing;
+        const currentUser = this.currentUser!;
+        const users = Array.isArray(existing) ? [...existing] : [];
+
+        const currentUserIndex = users.findIndex((user) => user.id === currentUser.id);
+        if (currentUserIndex >= 0) {
+            users[currentUserIndex] = currentUser;
+        } else {
+            users.unshift(currentUser);
         }
 
-        const currentUser = this.currentUser!;
-        const mockUsers: User[] = [
-            currentUser,
-            {
+        if (!users.some((user) => user.role === 'developer')) {
+            users.push({
                 id: uuidv4(),
                 firstName: 'Maria',
                 lastName: 'Nowak',
                 email: 'maria.nowak@example.com',
                 role: 'developer'
-            },
-            {
+            });
+        }
+
+        if (!users.some((user) => user.role === 'devops')) {
+            users.push({
                 id: uuidv4(),
                 firstName: 'Piotr',
                 lastName: 'Lewandowski',
                 email: 'piotr.lewandowski@example.com',
                 role: 'devops'
-            }
-        ];
+            });
+        }
 
-        listApi.setAll(mockUsers);
-        return mockUsers;
+        listApi.setAll(users);
+        return users;
     }
 
     getCurrentUser(): User {
@@ -67,6 +79,10 @@ export class UserService {
 
     getAllUsers(): User[] {
         return [...this.allUsers];
+    }
+
+    getAssignableUsers(): User[] {
+        return this.allUsers.filter((u) => u.role === 'developer' || u.role === 'devops');
     }
 
     getUserById(id: string): User | undefined {
@@ -79,7 +95,7 @@ export class UserService {
             firstName: data.firstName !== undefined ? data.firstName.trim() : this.currentUser!.firstName,
             lastName: data.lastName !== undefined ? data.lastName.trim() : this.currentUser!.lastName,
             email: data.email !== undefined ? data.email.trim() : this.currentUser!.email,
-            role: data.role !== undefined ? data.role : this.currentUser!.role,
+            role: 'admin',
         };
         api.setItem(updated);
         this.currentUser = updated;
