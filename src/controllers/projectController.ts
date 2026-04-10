@@ -1,5 +1,8 @@
 import { ProjectModel } from "../models/project";
 import { ProjectService, projectService } from "../services/projectService";
+import { authService } from "../services/authService";
+import { notificationService } from "../services/notificationService";
+import { userService } from "../services/userService";
 import type { CreateProjectDTO, UpdateProjectDTO, Project} from "../types";
 
 export class ProjectController {
@@ -24,7 +27,9 @@ export class ProjectController {
     create(payload: CreateProjectDTO): Project {
         const errors = ProjectModel.validateCreate(payload);
         if (errors.length > 0) throw new Error("Błąd walidacji: " + errors.join(" "));
-        return this.service.create(payload);
+        const created = this.service.create(payload);
+        this.notifyAdminsAboutProjectCreation(created);
+        return created;
     }
     
     update(id: string, payload: UpdateProjectDTO): Project {
@@ -42,6 +47,22 @@ export class ProjectController {
     remove(id: string): void {
         const deleted = this.service.delete(id);
         if (!deleted) throw new Error("Projekt o podanym ID nie istnieje.");
+    }
+
+    private notifyAdminsAboutProjectCreation(project: Project): void {
+        const actorId = authService.getLoggedUserId();
+        const recipients = userService
+            .getAllUsers()
+            .filter((user) => user.role === 'admin' && user.id !== actorId);
+
+        recipients.forEach((admin) => {
+            notificationService.create({
+                title: 'Utworzono nowy projekt',
+                message: `Projekt "${project.name}" zostal utworzony.`,
+                priority: 'high',
+                recipientId: admin.id,
+            });
+        });
     }
 }
 

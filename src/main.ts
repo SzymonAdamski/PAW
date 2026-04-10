@@ -6,13 +6,19 @@ import { projectController } from './controllers/projectController';
 import { activeProjectService } from './services/activeProjectService';
 import { storyController } from './controllers/storyController';
 import { taskController } from './controllers/taskController';
-import type { StoryStatus, StoryPriority, TaskStatus, TaskPriority, Task } from './types';
+import { notificationService } from './services/notificationService';
+import type { StoryStatus, StoryPriority, TaskStatus, TaskPriority, Task, Notification, NotificationPriority } from './types';
 
 // State
+type AppView = 'dashboard' | 'notifications' | 'notification-detail';
+
+let appView: AppView = 'dashboard';
 let statusFilter: StoryStatus | 'all' = 'all';
 let editingStoryId: string | null = null;
 let selectedTaskId: string | null = null;
 let taskFormState: { mode: 'create'; storyId: string } | { mode: 'edit'; storyId: string; taskId: string } | null = null;
+let selectedNotificationId: string | null = null;
+const notificationDialogQueue: Notification[] = [];
 
 const app = document.querySelector<HTMLDivElement>('#app');
 
@@ -44,6 +50,12 @@ const taskStatusLabels: Record<TaskStatus, string> = {
   done: 'Done',
 };
 
+const notificationPriorityLabels: Record<NotificationPriority, string> = {
+  low: 'Niski',
+  medium: 'Sredni',
+  high: 'Wysoki',
+};
+
 type AppTheme = 'light' | 'dark';
 const THEME_STORAGE_KEY = 'app-theme';
 let currentTheme: AppTheme = getInitialTheme();
@@ -55,6 +67,40 @@ function getLoggedUser() {
   }
 
   return userService.getUserById(state.userId) ?? userService.getCurrentUser();
+}
+
+function getUnreadNotificationsCount(): number {
+  const user = getLoggedUser();
+  if (!user) {
+    return 0;
+  }
+
+  return notificationService.countUnreadByRecipient(user.id);
+}
+
+function openNotificationsList(): void {
+  appView = 'notifications';
+  selectedNotificationId = null;
+  render();
+}
+
+function openDashboard(): void {
+  appView = 'dashboard';
+  selectedNotificationId = null;
+  selectedTaskId = null;
+  taskFormState = null;
+  render();
+}
+
+function openNotificationDetail(notificationId: string): void {
+  removeNotificationFromDialogQueue(notificationId);
+  selectedNotificationId = notificationId;
+  appView = 'notification-detail';
+  render();
+}
+
+function closeCurrentDialogNotification(): void {
+  notificationDialogQueue.shift();
 }
 
 function escapeHtml(value: string): string {
@@ -105,14 +151,23 @@ function bindThemeToggle(): void {
 
 function buildHeader(): string {
   const user = getLoggedUser();
+  const unreadCount = getUnreadNotificationsCount();
 
   return `
     <header class="app-header">
       <h1>ManagMe</h1>
       <div class="header-actions">
+        <nav class="header-menu">
+          <button id="menu-dashboard-link" class="btn btn-sm btn-outline-secondary" type="button">Pulpit</button>
+          <button id="notifications-menu-link" class="btn btn-sm btn-outline-secondary" type="button">Powiadomienia</button>
+        </nav>
         <div class="user-info">
           ${user
-            ? `<span>Zalogowany: <strong>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</strong> (${user.role})</span>`
+            ? `<span>Zalogowany: <strong>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</strong> (${user.role})</span>
+               <button id="notification-counter-link" type="button" class="notification-counter-btn" aria-label="Nieprzeczytane powiadomienia">
+                 <span>Nieprzeczytane</span>
+                 <span class="notification-counter-badge">${unreadCount}</span>
+               </button>`
             : '<span>Brak zalogowanego uzytkownika</span>'}
         </div>
         <button id="theme-toggle" class="btn btn-sm btn-outline-secondary" type="button"></button>
@@ -121,13 +176,85 @@ function buildHeader(): string {
   `;
 }
 
+function renderNotificationDialog(): string {
+  const notification = notificationDialogQueue[0];
+  if (!notification) {
+    return '';
+  }
+
+  return `
+    <div class="notification-dialog" role="dialog" aria-modal="true" aria-label="Nowe powiadomienie">
+      <div class="notification-dialog-header">
+        <strong>Nowe powiadomienie</strong>
+        <span class="notification-priority-badge priority-${notification.priority}">${notificationPriorityLabels[notification.priority]}</span>
+      </div>
+      <h3>${escapeHtml(notification.title)}</h3>
+      <p>${escapeHtml(notification.message)}</p>
+      <p class="muted">Data: ${formatDate(notification.date)}</p>
+      <div class="notification-dialog-actions">
+        <button id="notification-dialog-open" class="primary" type="button">Szczegoly</button>
+        <button id="notification-dialog-close" type="button">Zamknij</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindHeaderEvents(): void {
+  document.getElementById('menu-dashboard-link')?.addEventListener('click', () => {
+    openDashboard();
+  });
+
+  document.getElementById('notifications-menu-link')?.addEventListener('click', () => {
+    openNotificationsList();
+  });
+
+  document.getElementById('notification-counter-link')?.addEventListener('click', () => {
+    openNotificationsList();
+  });
+}
+
+function bindNotificationDialogEvents(): void {
+  document.getElementById('notification-dialog-close')?.addEventListener('click', () => {
+    closeCurrentDialogNotification();
+    render();
+  });
+
+  document.getElementById('notification-dialog-open')?.addEventListener('click', () => {
+    const currentNotification = notificationDialogQueue[0];
+    if (!currentNotification) {
+      return;
+    }
+
+    closeCurrentDialogNotification();
+    openNotificationDetail(currentNotification.id);
+  });
+}
+
 function renderPage(content: string): void {
-  app!.innerHTML = `${buildHeader()}${content}`;
+  app!.innerHTML = `${buildHeader()}${content}${renderNotificationDialog()}`;
+  bindHeaderEvents();
   bindThemeToggle();
+  bindNotificationDialogEvents();
   updateThemeButtonLabel();
 }
 
 function render(): void {
+  if (appView === 'notifications') {
+    renderNotificationsList();
+    return;
+  }
+
+  if (appView === 'notification-detail') {
+    if (!selectedNotificationId) {
+      appView = 'notifications';
+      renderNotificationsList();
+      return;
+    }
+
+    renderNotificationDetail(selectedNotificationId);
+    return;
+  }
+
   if (taskFormState) {
     renderTaskForm(taskFormState);
     return;
@@ -241,6 +368,181 @@ function renderDashboard(): void {
 
   renderPage(dashboardContent);
   bindDashboardEvents(stories);
+}
+
+function renderNotificationsList(): void {
+  const user = getLoggedUser();
+
+  const content = `
+    <section class="section">
+      <button class="back-btn" id="notifications-back-to-dashboard">Powrot</button>
+      <h2>Powiadomienia</h2>
+      ${
+        !user
+          ? '<p class="empty">Brak zalogowanego uzytkownika.</p>'
+          : renderNotificationsListContent(user.id)
+      }
+    </section>
+  `;
+
+  renderPage(content);
+  bindNotificationsListEvents();
+}
+
+function renderNotificationsListContent(userId: string): string {
+  const notifications = notificationService.listByRecipient(userId);
+
+  if (notifications.length === 0) {
+    return '<p class="empty">Brak powiadomien.</p>';
+  }
+
+  return `
+    <div class="notification-list">
+      ${notifications
+        .map(
+          (notification) => `
+            <article class="notification-item ${notification.isRead ? 'is-read' : 'is-unread'}">
+              <div class="notification-item-header">
+                <h3>${escapeHtml(notification.title)}</h3>
+                <span class="notification-priority-badge priority-${notification.priority}">
+                  ${notificationPriorityLabels[notification.priority]}
+                </span>
+              </div>
+              <p class="notification-item-message">${escapeHtml(notification.message)}</p>
+              <div class="notification-item-meta">
+                <span>Data: ${formatDate(notification.date)}</span>
+                <span>Status: ${notification.isRead ? 'Przeczytane' : 'Nieprzeczytane'}</span>
+              </div>
+              <div class="notification-item-actions">
+                <button type="button" class="primary js-notification-open" data-notification-id="${notification.id}">
+                  Szczegoly
+                </button>
+                <button
+                  type="button"
+                  class="js-notification-mark-read"
+                  data-notification-id="${notification.id}"
+                  ${notification.isRead ? 'disabled' : ''}
+                >
+                  Oznacz jako przeczytane
+                </button>
+              </div>
+            </article>
+          `,
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+function renderNotificationDetail(notificationId: string): void {
+  const user = getLoggedUser();
+  if (!user) {
+    appView = 'notifications';
+    renderNotificationsList();
+    return;
+  }
+
+  const notification = notificationService.getById(notificationId);
+  if (!notification || notification.recipientId !== user.id) {
+    appView = 'notifications';
+    selectedNotificationId = null;
+    renderNotificationsList();
+    return;
+  }
+
+  if (!notification.isRead) {
+    markNotificationAsRead(notification.id);
+  }
+
+  const nextNotification = notificationService.getById(notificationId);
+  if (!nextNotification) {
+    appView = 'notifications';
+    selectedNotificationId = null;
+    renderNotificationsList();
+    return;
+  }
+
+  const content = `
+    <section class="section">
+      <button class="back-btn" id="notification-detail-back">Powrot do listy</button>
+      <h2>Szczegoly powiadomienia</h2>
+
+      <article class="notification-detail priority-${nextNotification.priority}">
+        <div class="notification-item-header">
+          <h3>${escapeHtml(nextNotification.title)}</h3>
+          <span class="notification-priority-badge priority-${nextNotification.priority}">
+            ${notificationPriorityLabels[nextNotification.priority]}
+          </span>
+        </div>
+        <p class="notification-detail-message">${escapeHtml(nextNotification.message)}</p>
+        <div class="notification-item-meta">
+          <span>Data: ${formatDate(nextNotification.date)}</span>
+          <span>Status: ${nextNotification.isRead ? 'Przeczytane' : 'Nieprzeczytane'}</span>
+        </div>
+      </article>
+
+      <div class="task-detail-actions">
+        <button id="notification-detail-mark-read" type="button">
+          Oznacz jako przeczytane
+        </button>
+      </div>
+    </section>
+  `;
+
+  renderPage(content);
+  bindNotificationDetailEvents(nextNotification.id);
+}
+
+function bindNotificationsListEvents(): void {
+  document.getElementById('notifications-back-to-dashboard')?.addEventListener('click', () => {
+    openDashboard();
+  });
+
+  document.querySelectorAll<HTMLElement>('.js-notification-open').forEach((button) => {
+    button.addEventListener('click', () => {
+      const notificationId = button.dataset.notificationId;
+      if (!notificationId) {
+        return;
+      }
+
+      openNotificationDetail(notificationId);
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('.js-notification-mark-read').forEach((button) => {
+    button.addEventListener('click', () => {
+      const notificationId = button.dataset.notificationId;
+      if (!notificationId) {
+        return;
+      }
+
+      markNotificationAsRead(notificationId);
+      render();
+    });
+  });
+}
+
+function bindNotificationDetailEvents(notificationId: string): void {
+  document.getElementById('notification-detail-back')?.addEventListener('click', () => {
+    openNotificationsList();
+  });
+
+  document.getElementById('notification-detail-mark-read')?.addEventListener('click', () => {
+    markNotificationAsRead(notificationId);
+    render();
+  });
+}
+
+function removeNotificationFromDialogQueue(notificationId: string): void {
+  const index = notificationDialogQueue.findIndex((notification) => notification.id === notificationId);
+  if (index >= 0) {
+    notificationDialogQueue.splice(index, 1);
+  }
+}
+
+function markNotificationAsRead(notificationId: string): void {
+  notificationService.markAsRead(notificationId);
+  removeNotificationFromDialogQueue(notificationId);
 }
 
 function renderStoryCard(storyId: string): string {
@@ -759,6 +1061,27 @@ function bindTaskFormEvents(state: NonNullable<typeof taskFormState>): void {
   });
 }
 
+function bindNotificationCreatedListener(): void {
+  notificationService.subscribe((notification) => {
+    const user = getLoggedUser();
+    if (!user) {
+      return;
+    }
+
+    if (notification.recipientId !== user.id) {
+      return;
+    }
+
+    if (notification.priority !== 'medium' && notification.priority !== 'high') {
+      return;
+    }
+
+    notificationDialogQueue.push(notification);
+    render();
+  });
+}
+
 activeProjectService.ensureActiveProjectStillExists();
 applyTheme(currentTheme);
+bindNotificationCreatedListener();
 render();

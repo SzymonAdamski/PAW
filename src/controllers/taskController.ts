@@ -1,4 +1,6 @@
 import { TaskModel } from '../models/task';
+import { authService } from '../services/authService';
+import { notificationService } from '../services/notificationService';
 import { TaskService, taskService } from '../services/taskService';
 import { storyService } from '../services/storyService';
 import { userService } from '../services/userService';
@@ -46,6 +48,7 @@ export class TaskController {
 
         const created = this.service.create(payload);
         this.syncStoryStatus(created.storyId);
+        this.notifyStoryOwnerAboutTaskCreated(created.id);
         return created;
     }
 
@@ -75,6 +78,8 @@ export class TaskController {
         }
 
         this.syncStoryStatus(updated.storyId);
+        this.notifyAboutAssigneeChange(existing, updated);
+        this.notifyAboutStatusChange(existing, updated);
         return updated;
     }
 
@@ -101,6 +106,8 @@ export class TaskController {
         }
 
         this.syncStoryStatus(updated.storyId);
+        this.notifyAboutAssigneeChange(task, updated);
+        this.notifyAboutStatusChange(task, updated);
         return updated;
     }
 
@@ -120,6 +127,7 @@ export class TaskController {
         }
 
         this.syncStoryStatus(updated.storyId);
+        this.notifyAboutStatusChange(task, updated);
         return updated;
     }
 
@@ -135,6 +143,7 @@ export class TaskController {
         }
 
         this.syncStoryStatus(task.storyId);
+        this.notifyStoryOwnerAboutTaskRemoved(task);
     }
 
     private ensureValidAssignee(userId: string | null | undefined): void {
@@ -150,6 +159,93 @@ export class TaskController {
         if (user.role !== 'developer' && user.role !== 'devops') {
             throw new Error('Zadanie moze byc przypisane tylko do devops lub developer.');
         }
+    }
+
+    private notifyStoryOwnerAboutTaskCreated(taskId: string): void {
+        const task = this.service.getById(taskId);
+        if (!task) {
+            return;
+        }
+
+        const story = storyService.getById(task.storyId);
+        if (!story || this.shouldSkipRecipient(story.ownerId)) {
+            return;
+        }
+
+        notificationService.create({
+            title: 'Nowe zadanie w historyjce',
+            message: `Dodano zadanie "${task.name}" do historyjki "${story.name}".`,
+            priority: 'medium',
+            recipientId: story.ownerId,
+        });
+    }
+
+    private notifyStoryOwnerAboutTaskRemoved(task: Task): void {
+        const story = storyService.getById(task.storyId);
+        if (!story || this.shouldSkipRecipient(story.ownerId)) {
+            return;
+        }
+
+        notificationService.create({
+            title: 'Usuniecie zadania z historyjki',
+            message: `Usunieto zadanie "${task.name}" z historyjki "${story.name}".`,
+            priority: 'medium',
+            recipientId: story.ownerId,
+        });
+    }
+
+    private notifyAboutAssigneeChange(previousTask: Task, updatedTask: Task): void {
+        const previousAssigneeId = previousTask.assignedToId;
+        const nextAssigneeId = updatedTask.assignedToId;
+
+        if (!nextAssigneeId || nextAssigneeId === previousAssigneeId || this.shouldSkipRecipient(nextAssigneeId)) {
+            return;
+        }
+
+        const story = storyService.getById(updatedTask.storyId);
+
+        notificationService.create({
+            title: 'Przypisanie osoby do zadania',
+            message: story
+                ? `Zadanie "${updatedTask.name}" w historyjce "${story.name}" zostalo do Ciebie przypisane.`
+                : `Zadanie "${updatedTask.name}" zostalo do Ciebie przypisane.`,
+            priority: 'high',
+            recipientId: nextAssigneeId,
+        });
+    }
+
+    private notifyAboutStatusChange(previousTask: Task, updatedTask: Task): void {
+        if (previousTask.status === updatedTask.status) {
+            return;
+        }
+
+        if (updatedTask.status !== 'doing' && updatedTask.status !== 'done') {
+            return;
+        }
+
+        const story = storyService.getById(updatedTask.storyId);
+        if (!story || this.shouldSkipRecipient(story.ownerId)) {
+            return;
+        }
+
+        const priority = updatedTask.status === 'done' ? 'medium' : 'low';
+        const statusLabel = updatedTask.status === 'done' ? 'done' : 'doing';
+
+        notificationService.create({
+            title: 'Zmiana statusu zadania',
+            message: `Zadanie "${updatedTask.name}" w historyjce "${story.name}" zmienilo status na ${statusLabel}.`,
+            priority,
+            recipientId: story.ownerId,
+        });
+    }
+
+    private shouldSkipRecipient(recipientId: string | null | undefined): boolean {
+        if (!recipientId) {
+            return true;
+        }
+
+        const actorId = authService.getLoggedUserId();
+        return actorId !== null && actorId === recipientId;
     }
 
     private syncStoryStatus(storyId: string): void {
