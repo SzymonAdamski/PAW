@@ -51,9 +51,10 @@ export class ProjectController {
 
     private notifyAdminsAboutProjectCreation(project: Project): void {
         const actorId = authService.getLoggedUserId();
-        const recipients = userService
-            .getAllUsers()
-            .filter((user) => user.role === 'admin' && user.id !== actorId);
+        const recipients = userService.getAdminUsers({
+            excludeUserId: actorId ?? undefined,
+            includeBlocked: false,
+        });
 
         recipients.forEach((admin) => {
             notificationService.create({

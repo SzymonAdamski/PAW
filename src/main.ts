@@ -1,5 +1,6 @@
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './style.css';
+import { appConfig, getConfigurationErrors } from './config';
 import { authService } from './services/authService';
 import { userService } from './services/userService';
 import { projectController } from './controllers/projectController';
@@ -7,10 +8,12 @@ import { activeProjectService } from './services/activeProjectService';
 import { storyController } from './controllers/storyController';
 import { taskController } from './controllers/taskController';
 import { notificationService } from './services/notificationService';
-import type { StoryStatus, StoryPriority, TaskStatus, TaskPriority, Task, Notification, NotificationPriority } from './types';
+import { clearGoogleAutoSelect, renderGoogleSignInButton } from './services/googleIdentityService';
+import type { StoryStatus, StoryPriority, TaskStatus, TaskPriority, Task, Notification, NotificationPriority, UserRole } from './types';
 
 // State
-type AppView = 'dashboard' | 'notifications' | 'notification-detail';
+type AppView = 'dashboard' | 'notifications' | 'notification-detail' | 'users';
+type AccessGate = 'app' | 'login' | 'blocked' | 'pending' | 'config-error';
 
 let appView: AppView = 'dashboard';
 let statusFilter: StoryStatus | 'all' = 'all';
@@ -18,6 +21,9 @@ let editingStoryId: string | null = null;
 let selectedTaskId: string | null = null;
 let taskFormState: { mode: 'create'; storyId: string } | { mode: 'edit'; storyId: string; taskId: string } | null = null;
 let selectedNotificationId: string | null = null;
+let authErrorMessage: string | null = null;
+let isAuthBusy = false;
+let usersManagementMessage: string | null = null;
 const notificationDialogQueue: Notification[] = [];
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -56,9 +62,29 @@ const notificationPriorityLabels: Record<NotificationPriority, string> = {
   high: 'Wysoki',
 };
 
+const roleLabels: Record<UserRole, string> = {
+  admin: 'Admin',
+  devops: 'DevOps',
+  developer: 'Developer',
+  guest: 'Gosc',
+};
+
+const editableRoles: UserRole[] = ['admin', 'devops', 'developer', 'guest'];
+
 type AppTheme = 'light' | 'dark';
 const THEME_STORAGE_KEY = 'app-theme';
 let currentTheme: AppTheme = getInitialTheme();
+
+function resetTransientViewState(): void {
+  appView = 'dashboard';
+  statusFilter = 'all';
+  editingStoryId = null;
+  selectedTaskId = null;
+  taskFormState = null;
+  selectedNotificationId = null;
+  usersManagementMessage = null;
+  notificationDialogQueue.length = 0;
+}
 
 function getLoggedUser() {
   const state = authService.getState();
@@ -66,7 +92,35 @@ function getLoggedUser() {
     return null;
   }
 
-  return userService.getUserById(state.userId) ?? userService.getCurrentUser();
+  return userService.getUserById(state.userId) ?? null;
+}
+
+function getAccessGate(): AccessGate {
+  const configErrors = getConfigurationErrors();
+  if (configErrors.length > 0) {
+    return 'config-error';
+  }
+
+  const state = authService.getState();
+  if (!state.isLoggedIn || !state.userId) {
+    return 'login';
+  }
+
+  const user = userService.getUserById(state.userId);
+  if (!user) {
+    authService.clearLoggedUser();
+    return 'login';
+  }
+
+  if (user.blocked) {
+    return 'blocked';
+  }
+
+  if (user.role === 'guest') {
+    return 'pending';
+  }
+
+  return 'app';
 }
 
 function getUnreadNotificationsCount(): number {
@@ -81,6 +135,7 @@ function getUnreadNotificationsCount(): number {
 function openNotificationsList(): void {
   appView = 'notifications';
   selectedNotificationId = null;
+  usersManagementMessage = null;
   render();
 }
 
@@ -89,6 +144,16 @@ function openDashboard(): void {
   selectedNotificationId = null;
   selectedTaskId = null;
   taskFormState = null;
+  usersManagementMessage = null;
+  render();
+}
+
+function openUsersList(): void {
+  appView = 'users';
+  selectedNotificationId = null;
+  selectedTaskId = null;
+  taskFormState = null;
+  usersManagementMessage = null;
   render();
 }
 
@@ -101,6 +166,15 @@ function openNotificationDetail(notificationId: string): void {
 
 function closeCurrentDialogNotification(): void {
   notificationDialogQueue.shift();
+}
+
+function handleLogout(): void {
+  authService.clearLoggedUser();
+  clearGoogleAutoSelect();
+  authErrorMessage = null;
+  isAuthBusy = false;
+  resetTransientViewState();
+  render();
 }
 
 function escapeHtml(value: string): string {
@@ -160,14 +234,16 @@ function buildHeader(): string {
         <nav class="header-menu">
           <button id="menu-dashboard-link" class="btn btn-sm btn-outline-secondary" type="button">Pulpit</button>
           <button id="notifications-menu-link" class="btn btn-sm btn-outline-secondary" type="button">Powiadomienia</button>
+          ${user?.role === 'admin' ? '<button id="menu-users-link" class="btn btn-sm btn-outline-secondary" type="button">Uzytkownicy</button>' : ''}
         </nav>
         <div class="user-info">
           ${user
-            ? `<span>Zalogowany: <strong>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</strong> (${user.role})</span>
+            ? `<span>Zalogowany: <strong>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</strong> (${roleLabels[user.role]})</span>
                <button id="notification-counter-link" type="button" class="notification-counter-btn" aria-label="Nieprzeczytane powiadomienia">
                  <span>Nieprzeczytane</span>
                  <span class="notification-counter-badge">${unreadCount}</span>
-               </button>`
+               </button>
+               <button id="header-logout-link" type="button" class="btn btn-sm btn-outline-secondary">Wyloguj</button>`
             : '<span>Brak zalogowanego uzytkownika</span>'}
         </div>
         <button id="theme-toggle" class="btn btn-sm btn-outline-secondary" type="button"></button>
@@ -208,8 +284,16 @@ function bindHeaderEvents(): void {
     openNotificationsList();
   });
 
+  document.getElementById('menu-users-link')?.addEventListener('click', () => {
+    openUsersList();
+  });
+
   document.getElementById('notification-counter-link')?.addEventListener('click', () => {
     openNotificationsList();
+  });
+
+  document.getElementById('header-logout-link')?.addEventListener('click', () => {
+    handleLogout();
   });
 }
 
@@ -238,7 +322,151 @@ function renderPage(content: string): void {
   updateThemeButtonLabel();
 }
 
+function renderGatePage(content: string): void {
+  app!.innerHTML = content;
+
+  document.getElementById('auth-logout-btn')?.addEventListener('click', () => {
+    handleLogout();
+  });
+}
+
+async function handleGoogleCredential(credential: string): Promise<void> {
+  if (isAuthBusy) {
+    return;
+  }
+
+  isAuthBusy = true;
+  authErrorMessage = null;
+  render();
+
+  try {
+    authService.signInWithGoogleCredential(credential);
+    resetTransientViewState();
+  } catch (error) {
+    authErrorMessage = (error as Error).message;
+  }
+
+  isAuthBusy = false;
+  render();
+}
+
+function renderConfigErrorView(): void {
+  const errors = getConfigurationErrors();
+
+  const content = `
+    <section class="auth-shell">
+      <article class="auth-card">
+        <h1>Blad konfiguracji aplikacji</h1>
+        <p>Ustaw wymagane zmienne srodowiskowe, aby uruchomic logowanie.</p>
+        <ul class="auth-error-list">
+          ${errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}
+        </ul>
+      </article>
+    </section>
+  `;
+
+  renderGatePage(content);
+}
+
+function renderLoginView(): void {
+  const content = `
+    <section class="auth-shell">
+      <article class="auth-card">
+        <h1>Logowanie</h1>
+        <p>Zaloguj sie przez Google, aby uzyskac dostep do aplikacji.</p>
+        <div id="google-signin-button" class="google-signin-slot"></div>
+        ${isAuthBusy ? '<p class="auth-muted">Trwa logowanie...</p>' : ''}
+        ${authErrorMessage ? `<p class="auth-error" role="alert">${escapeHtml(authErrorMessage)}</p>` : ''}
+      </article>
+    </section>
+  `;
+
+  renderGatePage(content);
+
+  const container = document.getElementById('google-signin-button');
+  if (!container || isAuthBusy) {
+    return;
+  }
+
+  renderGoogleSignInButton(container, appConfig.googleClientId, (credential) => {
+    void handleGoogleCredential(credential);
+  }).catch((error) => {
+    authErrorMessage = (error as Error).message;
+    render();
+  });
+}
+
+function renderBlockedView(): void {
+  const user = getLoggedUser();
+
+  const content = `
+    <section class="auth-shell">
+      <article class="auth-card">
+        <h1>Konto zablokowane</h1>
+        <p>
+          ${user ? `Konto ${escapeHtml(user.email)} jest obecnie zablokowane.` : 'To konto jest obecnie zablokowane.'}
+        </p>
+        <p>Skontaktuj sie z administratorem systemu.</p>
+        <button id="auth-logout-btn" class="btn btn-outline-secondary" type="button">Wyloguj</button>
+      </article>
+    </section>
+  `;
+
+  renderGatePage(content);
+}
+
+function renderPendingApprovalView(): void {
+  const user = getLoggedUser();
+
+  const content = `
+    <section class="auth-shell">
+      <article class="auth-card">
+        <h1>Oczekiwanie na zatwierdzenie konta</h1>
+        <p>
+          ${user ? `Konto ${escapeHtml(user.email)} oczekuje na nadanie roli przez administratora.` : 'Twoje konto oczekuje na zatwierdzenie.'}
+        </p>
+        <p>Po nadaniu roli dostep do aplikacji zostanie odblokowany.</p>
+        <button id="auth-logout-btn" class="btn btn-outline-secondary" type="button">Wyloguj</button>
+      </article>
+    </section>
+  `;
+
+  renderGatePage(content);
+}
+
 function render(): void {
+  const gate = getAccessGate();
+
+  if (gate === 'config-error') {
+    renderConfigErrorView();
+    return;
+  }
+
+  if (gate === 'login') {
+    renderLoginView();
+    return;
+  }
+
+  if (gate === 'blocked') {
+    renderBlockedView();
+    return;
+  }
+
+  if (gate === 'pending') {
+    renderPendingApprovalView();
+    return;
+  }
+
+  if (appView === 'users') {
+    const user = getLoggedUser();
+    if (user?.role === 'admin') {
+      renderUsersList();
+      return;
+    }
+
+    appView = 'dashboard';
+  }
+
   if (appView === 'notifications') {
     renderNotificationsList();
     return;
@@ -266,6 +494,127 @@ function render(): void {
   }
 
   renderDashboard();
+}
+
+function renderUsersList(): void {
+  const currentUser = getLoggedUser();
+  if (!currentUser || currentUser.role !== 'admin') {
+    openDashboard();
+    return;
+  }
+
+  const users = userService
+    .getAllUsers()
+    .sort((a, b) => a.email.localeCompare(b.email, 'pl-PL'));
+
+  const content = `
+    <section class="section">
+      <button class="back-btn" id="users-back-to-dashboard">Powrot</button>
+      <h2>Uzytkownicy</h2>
+      <p class="muted">Widok dostepny tylko dla administratorow.</p>
+      ${usersManagementMessage ? `<p class="users-feedback">${escapeHtml(usersManagementMessage)}</p>` : ''}
+      <div class="users-table-wrapper">
+        <table class="users-table">
+          <thead>
+            <tr>
+              <th>Imie i nazwisko</th>
+              <th>Email</th>
+              <th>Rola</th>
+              <th>Status</th>
+              <th>Akcje</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${users
+              .map((user) => {
+                const fullName = `${user.firstName} ${user.lastName}`.trim();
+                const roleOptions = editableRoles
+                  .map((role) => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${roleLabels[role]}</option>`)
+                  .join('');
+
+                return `
+                  <tr class="${user.blocked ? 'is-blocked' : ''}">
+                    <td>${escapeHtml(fullName || '-')}</td>
+                    <td>${escapeHtml(user.email)}</td>
+                    <td>
+                      <select id="user-role-${user.id}" class="users-role-select" data-user-id="${user.id}">
+                        ${roleOptions}
+                      </select>
+                    </td>
+                    <td>
+                      <span class="users-status ${user.blocked ? 'blocked' : 'active'}">
+                        ${user.blocked ? 'Zablokowany' : 'Aktywny'}
+                      </span>
+                    </td>
+                    <td class="users-actions">
+                      <button type="button" class="js-user-role-apply" data-user-id="${user.id}">Zmien role</button>
+                      <button type="button" class="${user.blocked ? 'primary' : 'danger'} js-user-toggle-block" data-user-id="${user.id}" data-blocked="${user.blocked}">
+                        ${user.blocked ? 'Odblokuj' : 'Zablokuj'}
+                      </button>
+                    </td>
+                  </tr>
+                `;
+              })
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  renderPage(content);
+  bindUsersListEvents();
+}
+
+function bindUsersListEvents(): void {
+  document.getElementById('users-back-to-dashboard')?.addEventListener('click', () => {
+    openDashboard();
+  });
+
+  document.querySelectorAll<HTMLElement>('.js-user-role-apply').forEach((button) => {
+    button.addEventListener('click', () => {
+      const userId = button.dataset.userId;
+      if (!userId) {
+        return;
+      }
+
+      const roleSelect = document.getElementById(`user-role-${userId}`) as HTMLSelectElement | null;
+      if (!roleSelect) {
+        return;
+      }
+
+      const nextRole = roleSelect.value as UserRole;
+
+      try {
+        const updated = userService.updateUserAccess(userId, { role: nextRole });
+        usersManagementMessage = `Zmieniono role uzytkownika ${updated.email} na ${roleLabels[updated.role]}.`;
+        render();
+      } catch (error) {
+        alert((error as Error).message);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('.js-user-toggle-block').forEach((button) => {
+    button.addEventListener('click', () => {
+      const userId = button.dataset.userId;
+      const isBlocked = button.dataset.blocked === 'true';
+
+      if (!userId) {
+        return;
+      }
+
+      try {
+        const updated = userService.updateUserAccess(userId, { blocked: !isBlocked });
+        usersManagementMessage = updated.blocked
+          ? `Uzytkownik ${updated.email} zostal zablokowany.`
+          : `Uzytkownik ${updated.email} zostal odblokowany.`;
+        render();
+      } catch (error) {
+        alert((error as Error).message);
+      }
+    });
+  });
 }
 
 function renderDashboard(): void {
@@ -684,7 +1033,7 @@ function renderTaskDetail(taskId: string): void {
         <div><strong>Projekt:</strong> ${activeProject ? escapeHtml(activeProject.name) : '-'}</div>
         <div><strong>Przewidywany czas:</strong> ${task.estimatedHours} h</div>
         <div><strong>Zrealizowane roboczogodziny:</strong> ${task.workedHours} h</div>
-        <div><strong>Przypisana osoba:</strong> ${assignee ? `${escapeHtml(assignee.firstName)} ${escapeHtml(assignee.lastName)} (${assignee.role})` : 'Brak'}</div>
+        <div><strong>Przypisana osoba:</strong> ${assignee ? `${escapeHtml(assignee.firstName)} ${escapeHtml(assignee.lastName)} (${roleLabels[assignee.role]})` : 'Brak'}</div>
         <div><strong>Data dodania:</strong> ${formatDate(task.createdAt)}</div>
         <div><strong>Data startu:</strong> ${formatDate(task.startDate)}</div>
         <div><strong>Data zakonczenia:</strong> ${formatDate(task.completedAt)}</div>
@@ -703,7 +1052,7 @@ function renderTaskDetail(taskId: string): void {
             ${assignableUsers
               .map(
                 (user) =>
-                  `<option value="${user.id}" ${task.assignedToId === user.id ? 'selected' : ''}>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)} (${user.role})</option>`,
+                  `<option value="${user.id}" ${task.assignedToId === user.id ? 'selected' : ''}>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)} (${roleLabels[user.role]})</option>`,
               )
               .join('')}
           </select>
@@ -787,7 +1136,7 @@ function renderTaskForm(state: NonNullable<typeof taskFormState>): void {
           ${assignableUsers
             .map(
               (user) =>
-                `<option value="${user.id}" ${task?.assignedToId === user.id ? 'selected' : ''}>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)} (${user.role})</option>`,
+                `<option value="${user.id}" ${task?.assignedToId === user.id ? 'selected' : ''}>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)} (${roleLabels[user.role]})</option>`,
             )
             .join('')}
         </select>

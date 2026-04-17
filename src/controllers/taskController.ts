@@ -156,6 +156,10 @@ export class TaskController {
             throw new Error('Przypisany uzytkownik nie istnieje.');
         }
 
+        if (user.blocked) {
+            throw new Error('Nie mozna przypisac zablokowanego uzytkownika.');
+        }
+
         if (user.role !== 'developer' && user.role !== 'devops') {
             throw new Error('Zadanie moze byc przypisane tylko do devops lub developer.');
         }
