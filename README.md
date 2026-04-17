@@ -1,10 +1,2 @@
 ﻿# PAW
 
-## Konfiguracja logowania
-
-Przed uruchomieniem ustaw zmienne w pliku `.env`:
-
-```bash
-VITE_GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID
-VITE_SUPER_ADMIN_EMAIL=admin@example.com
-```
