@@ -10,7 +10,7 @@ import { taskController } from './controllers/taskController';
 import { initializeDataServices } from './services/dataInitialization';
 import { notificationService } from './services/notificationService';
 import { clearGoogleAutoSelect, renderGoogleSignInButton } from './services/googleIdentityService';
-import type { StoryStatus, StoryPriority, TaskStatus, TaskPriority, Task, Notification, NotificationPriority, UserRole } from './types';
+import type { StoryStatus, StoryPriority, TaskStatus, TaskPriority, Task, Notification, NotificationPriority, UserRole, Project } from './types';
 
 // State
 type AppView = 'dashboard' | 'notifications' | 'notification-detail' | 'users';
@@ -18,6 +18,7 @@ type AccessGate = 'app' | 'login' | 'blocked' | 'pending' | 'config-error';
 
 let appView: AppView = 'dashboard';
 let statusFilter: StoryStatus | 'all' = 'all';
+let projectFormState: { mode: 'create' } | { mode: 'edit'; projectId: string } | null = null;
 let editingStoryId: string | null = null;
 let selectedTaskId: string | null = null;
 let taskFormState: { mode: 'create'; storyId: string } | { mode: 'edit'; storyId: string; taskId: string } | null = null;
@@ -79,6 +80,7 @@ let currentTheme: AppTheme = getInitialTheme();
 function resetTransientViewState(): void {
   appView = 'dashboard';
   statusFilter = 'all';
+  projectFormState = null;
   editingStoryId = null;
   selectedTaskId = null;
   taskFormState = null;
@@ -618,102 +620,198 @@ function bindUsersListEvents(): void {
   });
 }
 
+function renderProjectForm(project: Project | null): string {
+  if (!projectFormState) {
+    return '';
+  }
+
+  const isEdit = projectFormState.mode === 'edit';
+
+  return `
+    <form id="project-form" class="project-form form-grid">
+      <h3>${isEdit ? 'Edytuj projekt' : 'Nowy projekt'}</h3>
+      <label for="project-name">Nazwa</label>
+      <input id="project-name" type="text" required value="${project ? escapeHtml(project.name) : ''}" />
+
+      <label for="project-description">Opis</label>
+      <textarea id="project-description" required>${project ? escapeHtml(project.description) : ''}</textarea>
+
+      <div class="form-actions">
+        <button type="submit" class="primary">${isEdit ? 'Zapisz projekt' : 'Dodaj projekt'}</button>
+        <button type="button" id="project-cancel">Anuluj</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderProjectSidebar(projects: Project[], activeProject: Project | null, projectFormProject: Project | null): string {
+  return `
+    <aside class="reddit-sidebar section">
+      <div class="sidebar-title-row">
+        <div>
+          <span class="sidebar-kicker">Workspace</span>
+          <h2>Projekty</h2>
+        </div>
+        <button id="project-new" class="primary" type="button">Nowy</button>
+      </div>
+
+      ${
+        projects.length === 0
+          ? '<p class="empty">Brak projektow.</p>'
+          : `<div class="project-list">
+              ${projects
+                .map(
+                  (project) => `
+                    <article class="project-item ${activeProject?.id === project.id ? 'active' : ''}">
+                      <button type="button" class="project-select-btn js-project-select" data-project-id="${project.id}">
+                        <strong>${escapeHtml(project.name)}</strong>
+                        <span>${escapeHtml(project.description)}</span>
+                      </button>
+                      <div class="project-item-actions">
+                        <button type="button" class="js-project-edit" data-project-id="${project.id}">Edytuj</button>
+                        <button type="button" class="danger js-project-delete" data-project-id="${project.id}">Usun</button>
+                      </div>
+                    </article>
+                  `,
+                )
+                .join('')}
+            </div>`
+      }
+
+      ${renderProjectForm(projectFormProject)}
+    </aside>
+  `;
+}
+
+function renderStoryForm(editingStory: ReturnType<typeof storyController.detail> | null): string {
+  return `
+    <section class="feed-composer">
+      <div class="composer-header">
+        <span class="composer-avatar">M</span>
+        <h2>${editingStory ? 'Edycja historyjki' : 'Nowa historyjka'}</h2>
+      </div>
+      <form id="story-form" class="form-grid">
+        <input type="hidden" id="story-id" value="${editingStory?.id ?? ''}" />
+
+        <label for="story-name">Nazwa</label>
+        <input id="story-name" type="text" required value="${editingStory ? escapeHtml(editingStory.name) : ''}" />
+
+        <label for="story-description">Opis</label>
+        <textarea id="story-description" required>${editingStory ? escapeHtml(editingStory.description) : ''}</textarea>
+
+        <div class="form-inline">
+          <div>
+            <label for="story-priority">Priorytet</label>
+            <select id="story-priority">
+              ${(['low', 'medium', 'high'] as StoryPriority[])
+                .map(
+                  (priority) =>
+                    `<option value="${priority}" ${editingStory?.priority === priority || (!editingStory && priority === 'medium') ? 'selected' : ''}>${storyPriorityLabels[priority]}</option>`,
+                )
+                .join('')}
+            </select>
+          </div>
+
+          <div>
+            <label for="story-status">Status</label>
+            <select id="story-status">
+              ${(['todo', 'doing', 'done'] as StoryStatus[])
+                .map(
+                  (status) =>
+                    `<option value="${status}" ${editingStory?.status === status || (!editingStory && status === 'todo') ? 'selected' : ''}>${storyStatusLabels[status]}</option>`,
+                )
+                .join('')}
+            </select>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="primary">${editingStory ? 'Zapisz zmiany' : 'Dodaj historyjke'}</button>
+          ${editingStory ? '<button type="button" id="story-cancel">Anuluj</button>' : ''}
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function renderProjectContext(activeProject: Project | null, stories: ReturnType<typeof storyController.listByProject>): string {
+  const tasks = stories.flatMap((story) => taskController.listByStory(story.id));
+  const counts: Record<StoryStatus, number> = {
+    todo: stories.filter((story) => story.status === 'todo').length,
+    doing: stories.filter((story) => story.status === 'doing').length,
+    done: stories.filter((story) => story.status === 'done').length,
+  };
+
+  return `
+    <aside class="reddit-context section">
+      ${
+        activeProject
+          ? `
+            <span class="sidebar-kicker">Aktywny projekt</span>
+            <h2>${escapeHtml(activeProject.name)}</h2>
+            <p class="context-description">${escapeHtml(activeProject.description)}</p>
+            <div class="context-stats">
+              <div><strong>${stories.length}</strong><span>Historyjki</span></div>
+              <div><strong>${tasks.length}</strong><span>Zadania</span></div>
+              <div><strong>${counts.done}</strong><span>Done</span></div>
+            </div>
+            <div class="filter-bar context-filters">
+              <button class="filter-btn ${statusFilter === 'all' ? 'active' : ''}" data-filter="all">Wszystkie</button>
+              <button class="filter-btn ${statusFilter === 'todo' ? 'active' : ''}" data-filter="todo">Todo (${counts.todo})</button>
+              <button class="filter-btn ${statusFilter === 'doing' ? 'active' : ''}" data-filter="doing">Doing (${counts.doing})</button>
+              <button class="filter-btn ${statusFilter === 'done' ? 'active' : ''}" data-filter="done">Done (${counts.done})</button>
+            </div>
+          `
+          : `
+            <span class="sidebar-kicker">Start</span>
+            <h2>Wybierz projekt</h2>
+            <p class="context-description">Po wybraniu projektu zobaczysz feed historyjek, zadania i tablice Kanban.</p>
+          `
+      }
+    </aside>
+  `;
+}
+
 function renderDashboard(): void {
   const projects = projectController.list();
   const activeProject = activeProjectService.getActiveProject();
   const stories = activeProject ? storyController.listByProject(activeProject.id) : [];
   const filteredStories = statusFilter === 'all' ? stories : stories.filter((story) => story.status === statusFilter);
+  const currentProjectFormState = projectFormState;
+  const projectFormProject = currentProjectFormState?.mode === 'edit'
+    ? projects.find((project) => project.id === currentProjectFormState.projectId) ?? null
+    : null;
 
   const editingStory = editingStoryId
     ? stories.find((story) => story.id === editingStoryId) ?? null
     : null;
 
   const dashboardContent = `
-    <section class="section">
-      <h2>Projekty</h2>
-      <div class="project-selector">
-        <select id="project-select">
-          <option value="">-- Wybierz projekt --</option>
-          ${projects
-            .map(
-              (project) => `<option value="${project.id}" ${activeProject?.id === project.id ? 'selected' : ''}>${escapeHtml(project.name)}</option>`,
-            )
-            .join('')}
-        </select>
-      </div>
-      ${activeProject ? `<p class="active-label">Aktywny projekt: <strong>${escapeHtml(activeProject.name)}</strong></p>` : ''}
-    </section>
+    <div class="reddit-shell">
+      ${renderProjectSidebar(projects, activeProject, projectFormProject)}
 
-    ${
-      activeProject
-        ? `
-          <section class="section">
-            <h2>Historyjki</h2>
+      <main class="reddit-feed">
+        ${
+          activeProject
+            ? `
+              ${renderStoryForm(editingStory)}
+              <section class="feed-section">
+                ${
+                  filteredStories.length === 0
+                    ? '<p class="empty feed-empty">Brak historyjek do wyswietlenia.</p>'
+                    : `<div class="story-grid feed-list">
+                        ${filteredStories.map((story) => renderStoryCard(story.id)).join('')}
+                      </div>`
+                }
+              </section>
+              ${renderKanban(stories)}
+            `
+            : '<section class="feed-composer empty-state"><h2>Wybierz albo utworz projekt</h2><p class="muted">Feed projektu pojawi sie tutaj po wybraniu aktywnego projektu.</p></section>'
+        }
+      </main>
 
-            <div class="filter-bar">
-              <button class="filter-btn ${statusFilter === 'all' ? 'active' : ''}" data-filter="all">Wszystkie</button>
-              <button class="filter-btn ${statusFilter === 'todo' ? 'active' : ''}" data-filter="todo">Todo</button>
-              <button class="filter-btn ${statusFilter === 'doing' ? 'active' : ''}" data-filter="doing">Doing</button>
-              <button class="filter-btn ${statusFilter === 'done' ? 'active' : ''}" data-filter="done">Done</button>
-            </div>
-
-            <div class="panel">
-              <h3>${editingStory ? 'Edycja historyjki' : 'Nowa historyjka'}</h3>
-              <form id="story-form" class="form-grid">
-                <input type="hidden" id="story-id" value="${editingStory?.id ?? ''}" />
-
-                <label for="story-name">Nazwa</label>
-                <input id="story-name" type="text" required value="${editingStory ? escapeHtml(editingStory.name) : ''}" />
-
-                <label for="story-description">Opis</label>
-                <textarea id="story-description" required>${editingStory ? escapeHtml(editingStory.description) : ''}</textarea>
-
-                <div class="form-inline">
-                  <div>
-                    <label for="story-priority">Priorytet</label>
-                    <select id="story-priority">
-                      ${(['low', 'medium', 'high'] as StoryPriority[])
-                        .map(
-                          (priority) =>
-                            `<option value="${priority}" ${editingStory?.priority === priority ? 'selected' : ''}>${storyPriorityLabels[priority]}</option>`,
-                        )
-                        .join('')}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label for="story-status">Status</label>
-                    <select id="story-status">
-                      ${(['todo', 'doing', 'done'] as StoryStatus[])
-                        .map(
-                          (status) =>
-                            `<option value="${status}" ${editingStory?.status === status ? 'selected' : ''}>${storyStatusLabels[status]}</option>`,
-                        )
-                        .join('')}
-                    </select>
-                  </div>
-                </div>
-
-                <div class="form-actions">
-                  <button type="submit">${editingStory ? 'Zapisz zmiany' : 'Dodaj historyjke'}</button>
-                  ${editingStory ? '<button type="button" id="story-cancel">Anuluj</button>' : ''}
-                </div>
-              </form>
-            </div>
-
-            ${
-              filteredStories.length === 0
-                ? '<p class="empty">Brak historyjek do wyswietlenia.</p>'
-                : `<div class="story-grid">
-                    ${filteredStories.map((story) => renderStoryCard(story.id)).join('')}
-                  </div>`
-            }
-          </section>
-
-          ${renderKanban(stories)}
-        `
-        : '<p class="empty">Wybierz projekt, aby zobaczyc historyjki i zadania.</p>'
-    }
+      ${renderProjectContext(activeProject, stories)}
+    </div>
   `;
 
   renderPage(dashboardContent);
@@ -1155,21 +1253,116 @@ function renderTaskForm(state: NonNullable<typeof taskFormState>): void {
 }
 
 function bindDashboardEvents(stories: ReturnType<typeof storyController.listByProject>): void {
-  document.getElementById('project-select')?.addEventListener('change', (event) => {
-    const nextProjectId = (event.target as HTMLSelectElement).value;
-
-    if (nextProjectId) {
-      activeProjectService.setActiveProject(nextProjectId);
-    } else {
-      activeProjectService.clearActiveProject();
-    }
-
-    statusFilter = 'all';
+  document.getElementById('project-new')?.addEventListener('click', () => {
+    projectFormState = { mode: 'create' };
     editingStoryId = null;
     selectedTaskId = null;
     taskFormState = null;
-
     render();
+  });
+
+  document.getElementById('project-cancel')?.addEventListener('click', () => {
+    projectFormState = null;
+    render();
+  });
+
+  document.querySelectorAll<HTMLElement>('.js-project-select').forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextProjectId = button.dataset.projectId;
+
+      if (!nextProjectId) {
+        return;
+      }
+
+      activeProjectService.setActiveProject(nextProjectId);
+      statusFilter = 'all';
+      projectFormState = null;
+      editingStoryId = null;
+      selectedTaskId = null;
+      taskFormState = null;
+
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('.js-project-edit').forEach((button) => {
+    button.addEventListener('click', () => {
+      const projectId = button.dataset.projectId;
+      if (!projectId) {
+        return;
+      }
+
+      projectFormState = { mode: 'edit', projectId };
+      editingStoryId = null;
+      selectedTaskId = null;
+      taskFormState = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('.js-project-delete').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const projectId = button.dataset.projectId;
+      if (!projectId) {
+        return;
+      }
+
+      const project = projectController.detail(projectId);
+      if (!confirm(`Usunac projekt "${project.name}"?`)) {
+        return;
+      }
+
+      try {
+        await projectController.remove(projectId);
+        if (activeProjectService.getActiveProjectId() === projectId) {
+          activeProjectService.clearActiveProject();
+        }
+        if (projectFormState?.mode === 'edit' && projectFormState.projectId === projectId) {
+          projectFormState = null;
+        }
+        statusFilter = 'all';
+        editingStoryId = null;
+        selectedTaskId = null;
+        taskFormState = null;
+        render();
+      } catch (error) {
+        alert((error as Error).message);
+      }
+    });
+  });
+
+  document.getElementById('project-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const user = getLoggedUser();
+    const name = (document.getElementById('project-name') as HTMLInputElement).value;
+    const description = (document.getElementById('project-description') as HTMLTextAreaElement).value;
+
+    try {
+      if (projectFormState?.mode === 'edit') {
+        await projectController.update(projectFormState.projectId, {
+          name,
+          description,
+        });
+      } else {
+        const author = user ? `${user.firstName} ${user.lastName}`.trim() || user.email : 'Uzytkownik';
+        const created = await projectController.create({
+          name,
+          description,
+          author,
+        });
+        activeProjectService.setActiveProject(created.id);
+      }
+
+      projectFormState = null;
+      statusFilter = 'all';
+      editingStoryId = null;
+      selectedTaskId = null;
+      taskFormState = null;
+      render();
+    } catch (error) {
+      alert((error as Error).message);
+    }
   });
 
   document.querySelectorAll<HTMLElement>('.filter-btn').forEach((button) => {
