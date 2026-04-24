@@ -34,6 +34,13 @@ export class AuthService {
     private state: LoggedUserState;
 
     constructor() {
+        this.state = {
+            userId: null,
+            isLoggedIn: false,
+        };
+    }
+
+    init(): void {
         this.state = this.loadState();
     }
 
@@ -95,20 +102,20 @@ export class AuthService {
         }
     }
 
-    private notifyAdminsAboutNewAccount(newUser: User): void {
+    private async notifyAdminsAboutNewAccount(newUser: User): Promise<void> {
         const recipients = userService.getAdminUsers({
             excludeUserId: newUser.id,
             includeBlocked: false,
         });
 
-        recipients.forEach((admin) => {
+        await Promise.all(recipients.map((admin) =>
             notificationService.create({
                 title: 'Utworzenie nowego konta w systemie',
                 message: `Nowe konto: ${newUser.firstName} ${newUser.lastName} (${newUser.email}).`,
                 priority: 'high',
                 recipientId: admin.id,
-            });
-        });
+            }),
+        ));
     }
 
     getState(): LoggedUserState {
@@ -123,14 +130,14 @@ export class AuthService {
         return this.state.userId;
     }
 
-    signInWithGoogleCredential(credential: string): { user: User; isFirstLogin: boolean } {
+    async signInWithGoogleCredential(credential: string): Promise<{ user: User; isFirstLogin: boolean }> {
         const payload = this.decodeGoogleCredential(credential);
         const fallbackName = splitFullName(payload.name ?? '');
 
         const firstName = payload.given_name ?? fallbackName.firstName;
         const lastName = payload.family_name ?? fallbackName.lastName;
 
-        const result = userService.upsertFromGoogleProfile({
+        const result = await userService.upsertFromGoogleProfile({
             providerUserId: payload.sub,
             email: payload.email,
             firstName,
@@ -143,7 +150,7 @@ export class AuthService {
         });
 
         if (result.isFirstLogin) {
-            this.notifyAdminsAboutNewAccount(result.user);
+            await this.notifyAdminsAboutNewAccount(result.user);
         }
 
         return result;

@@ -1,8 +1,8 @@
+import { createRepository } from '../api/repositoryFactory';
 import { StoryModel } from '../models/story';
-import { LocalStorageApi } from '../api/localStorageApi';
-import type { CreateStoryDTO, UpdateStoryDTO, Story, StoryStatus } from '../types';
+import type { CreateStoryDTO, Story, StoryStatus, UpdateStoryDTO } from '../types';
 
-const api = new LocalStorageApi<Story>('stories');
+const repository = createRepository<Story>('stories');
 
 function normalizeStoryStatus(status: unknown): StoryStatus {
     if (status === 'in-progress') {
@@ -35,28 +35,28 @@ function normalizeStory(raw: Partial<Story>): Story {
 export class StoryService {
     private stories: Story[] = [];
 
-    constructor() {
-        this.stories = this.load();
+    async init(): Promise<void> {
+        this.stories = await this.load();
     }
 
-    private load(): Story[] {
+    private async load(): Promise<Story[]> {
         try {
-            const raw = api.getAll();
+            const raw = await repository.getAll();
             if (!Array.isArray(raw)) {
                 return [];
             }
 
             const normalized = raw.map((story) => normalizeStory(story));
-            api.setAll(normalized);
+            await repository.setAll(normalized);
             return normalized;
         } catch (error) {
-            console.error('Blad wczytywania historyjek z localStorage:', error);
-            return [];
+            console.error('Blad wczytywania historyjek:', error);
+            throw error;
         }
     }
 
-    private save(): void {
-        api.setAll(this.stories);
+    private async save(): Promise<void> {
+        await repository.setAll(this.stories);
     }
 
     getAll(): Story[] {
@@ -71,14 +71,14 @@ export class StoryService {
         return this.stories.find((s) => s.id === id);
     }
 
-    create(data: CreateStoryDTO): Story {
+    async create(data: CreateStoryDTO): Promise<Story> {
         const newStory = StoryModel.create(data);
         this.stories.push(newStory);
-        this.save();
+        await this.save();
         return newStory;
     }
 
-    update(id: string, data: UpdateStoryDTO): Story | null {
+    async update(id: string, data: UpdateStoryDTO): Promise<Story | null> {
         const index = this.stories.findIndex((s) => s.id === id);
         if (index === -1) {
             return null;
@@ -86,17 +86,17 @@ export class StoryService {
 
         const updated = StoryModel.update(this.stories[index], data);
         this.stories[index] = updated;
-        this.save();
+        await repository.set(updated);
         return updated;
     }
 
-    delete(id: string): boolean {
+    async delete(id: string): Promise<boolean> {
         const before = this.stories.length;
         this.stories = this.stories.filter((s) => s.id !== id);
         const deleted = this.stories.length !== before;
 
         if (deleted) {
-            this.save();
+            await repository.delete(id);
         }
 
         return deleted;

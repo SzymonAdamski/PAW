@@ -1,8 +1,8 @@
+import { createRepository } from '../api/repositoryFactory';
 import { TaskModel } from '../models/task';
-import { LocalStorageApi } from '../api/localStorageApi';
-import type { CreateTaskDTO, UpdateTaskDTO, Task, TaskPriority, TaskStatus } from '../types';
+import type { CreateTaskDTO, Task, TaskPriority, TaskStatus, UpdateTaskDTO } from '../types';
 
-const api = new LocalStorageApi<Task>('tasks');
+const repository = createRepository<Task>('tasks');
 
 function normalizeTaskStatus(status: unknown): TaskStatus {
     if (status === 'in-progress') {
@@ -99,28 +99,28 @@ function normalizeTask(raw: Partial<Task>): Task {
 export class TaskService {
     private tasks: Task[] = [];
 
-    constructor() {
-        this.tasks = this.load();
+    async init(): Promise<void> {
+        this.tasks = await this.load();
     }
 
-    private load(): Task[] {
+    private async load(): Promise<Task[]> {
         try {
-            const raw = api.getAll();
+            const raw = await repository.getAll();
             if (!Array.isArray(raw)) {
                 return [];
             }
 
             const normalized = raw.map((task) => normalizeTask(task));
-            api.setAll(normalized);
+            await repository.setAll(normalized);
             return normalized;
         } catch (error) {
-            console.error('Blad wczytywania zadan z localStorage:', error);
-            return [];
+            console.error('Blad wczytywania zadan:', error);
+            throw error;
         }
     }
 
-    private save(): void {
-        api.setAll(this.tasks);
+    private async save(): Promise<void> {
+        await repository.setAll(this.tasks);
     }
 
     getAll(): Task[] {
@@ -139,14 +139,14 @@ export class TaskService {
         return this.tasks.find((t) => t.id === id);
     }
 
-    create(data: CreateTaskDTO): Task {
+    async create(data: CreateTaskDTO): Promise<Task> {
         const newTask = TaskModel.create(data);
         this.tasks.push(newTask);
-        this.save();
+        await this.save();
         return newTask;
     }
 
-    update(id: string, data: UpdateTaskDTO): Task | null {
+    async update(id: string, data: UpdateTaskDTO): Promise<Task | null> {
         const index = this.tasks.findIndex((t) => t.id === id);
         if (index === -1) {
             return null;
@@ -155,18 +155,18 @@ export class TaskService {
         const currentTask = this.tasks[index];
         const updatedTask = TaskModel.update(currentTask, data);
         this.tasks[index] = updatedTask;
-        this.save();
+        await repository.set(updatedTask);
         return updatedTask;
     }
 
-    delete(id: string): boolean {
+    async delete(id: string): Promise<boolean> {
         const index = this.tasks.findIndex((t) => t.id === id);
         if (index === -1) {
             return false;
         }
 
         this.tasks.splice(index, 1);
-        this.save();
+        await repository.delete(id);
         return true;
     }
 }

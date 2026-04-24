@@ -7,6 +7,7 @@ import { projectController } from './controllers/projectController';
 import { activeProjectService } from './services/activeProjectService';
 import { storyController } from './controllers/storyController';
 import { taskController } from './controllers/taskController';
+import { initializeDataServices } from './services/dataInitialization';
 import { notificationService } from './services/notificationService';
 import { clearGoogleAutoSelect, renderGoogleSignInButton } from './services/googleIdentityService';
 import type { StoryStatus, StoryPriority, TaskStatus, TaskPriority, Task, Notification, NotificationPriority, UserRole } from './types';
@@ -340,7 +341,7 @@ async function handleGoogleCredential(credential: string): Promise<void> {
   render();
 
   try {
-    authService.signInWithGoogleCredential(credential);
+    await authService.signInWithGoogleCredential(credential);
     resetTransientViewState();
   } catch (error) {
     authErrorMessage = (error as Error).message;
@@ -572,7 +573,7 @@ function bindUsersListEvents(): void {
   });
 
   document.querySelectorAll<HTMLElement>('.js-user-role-apply').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const userId = button.dataset.userId;
       if (!userId) {
         return;
@@ -586,7 +587,7 @@ function bindUsersListEvents(): void {
       const nextRole = roleSelect.value as UserRole;
 
       try {
-        const updated = userService.updateUserAccess(userId, { role: nextRole });
+        const updated = await userService.updateUserAccess(userId, { role: nextRole });
         usersManagementMessage = `Zmieniono role uzytkownika ${updated.email} na ${roleLabels[updated.role]}.`;
         render();
       } catch (error) {
@@ -596,7 +597,7 @@ function bindUsersListEvents(): void {
   });
 
   document.querySelectorAll<HTMLElement>('.js-user-toggle-block').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const userId = button.dataset.userId;
       const isBlocked = button.dataset.blocked === 'true';
 
@@ -605,7 +606,7 @@ function bindUsersListEvents(): void {
       }
 
       try {
-        const updated = userService.updateUserAccess(userId, { blocked: !isBlocked });
+        const updated = await userService.updateUserAccess(userId, { blocked: !isBlocked });
         usersManagementMessage = updated.blocked
           ? `Uzytkownik ${updated.email} zostal zablokowany.`
           : `Uzytkownik ${updated.email} zostal odblokowany.`;
@@ -800,7 +801,7 @@ function renderNotificationDetail(notificationId: string): void {
   }
 
   if (!notification.isRead) {
-    markNotificationAsRead(notification.id);
+    void markNotificationAsRead(notification.id);
   }
 
   const nextNotification = notificationService.getById(notificationId);
@@ -859,13 +860,13 @@ function bindNotificationsListEvents(): void {
   });
 
   document.querySelectorAll<HTMLElement>('.js-notification-mark-read').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const notificationId = button.dataset.notificationId;
       if (!notificationId) {
         return;
       }
 
-      markNotificationAsRead(notificationId);
+      await markNotificationAsRead(notificationId);
       render();
     });
   });
@@ -876,8 +877,8 @@ function bindNotificationDetailEvents(notificationId: string): void {
     openNotificationsList();
   });
 
-  document.getElementById('notification-detail-mark-read')?.addEventListener('click', () => {
-    markNotificationAsRead(notificationId);
+  document.getElementById('notification-detail-mark-read')?.addEventListener('click', async () => {
+    await markNotificationAsRead(notificationId);
     render();
   });
 }
@@ -889,8 +890,8 @@ function removeNotificationFromDialogQueue(notificationId: string): void {
   }
 }
 
-function markNotificationAsRead(notificationId: string): void {
-  notificationService.markAsRead(notificationId);
+async function markNotificationAsRead(notificationId: string): Promise<void> {
+  await notificationService.markAsRead(notificationId);
   removeNotificationFromDialogQueue(notificationId);
 }
 
@@ -1179,7 +1180,7 @@ function bindDashboardEvents(stories: ReturnType<typeof storyController.listByPr
     });
   });
 
-  document.getElementById('story-form')?.addEventListener('submit', (event) => {
+  document.getElementById('story-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     const activeProject = activeProjectService.getActiveProject();
@@ -1197,14 +1198,14 @@ function bindDashboardEvents(stories: ReturnType<typeof storyController.listByPr
 
     try {
       if (storyId) {
-        storyController.update(storyId, {
+        await storyController.update(storyId, {
           name,
           description,
           priority,
           status,
         });
       } else {
-        storyController.create({
+        await storyController.create({
           name,
           description,
           priority,
@@ -1234,7 +1235,7 @@ function bindDashboardEvents(stories: ReturnType<typeof storyController.listByPr
   });
 
   document.querySelectorAll<HTMLElement>('.js-story-delete').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const storyId = button.dataset.storyId;
 
       if (!storyId) {
@@ -1246,7 +1247,7 @@ function bindDashboardEvents(stories: ReturnType<typeof storyController.listByPr
       }
 
       try {
-        storyController.remove(storyId);
+        await storyController.remove(storyId);
         editingStoryId = null;
         render();
       } catch (error) {
@@ -1299,13 +1300,13 @@ function bindTaskDetailEvents(taskId: string): void {
     render();
   });
 
-  document.getElementById('task-delete')?.addEventListener('click', () => {
+  document.getElementById('task-delete')?.addEventListener('click', async () => {
     if (!confirm('Usunac to zadanie?')) {
       return;
     }
 
     try {
-      taskController.remove(taskId);
+      await taskController.remove(taskId);
       selectedTaskId = null;
       render();
     } catch (error) {
@@ -1313,7 +1314,7 @@ function bindTaskDetailEvents(taskId: string): void {
     }
   });
 
-  document.getElementById('task-assignee-form')?.addEventListener('submit', (event) => {
+  document.getElementById('task-assignee-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     const assigneeId = (document.getElementById('task-assignee-select') as HTMLSelectElement).value;
@@ -1324,16 +1325,16 @@ function bindTaskDetailEvents(taskId: string): void {
     }
 
     try {
-      taskController.assignUser(taskId, assigneeId);
+      await taskController.assignUser(taskId, assigneeId);
       render();
     } catch (error) {
       alert((error as Error).message);
     }
   });
 
-  document.getElementById('task-mark-done')?.addEventListener('click', () => {
+  document.getElementById('task-mark-done')?.addEventListener('click', async () => {
     try {
-      taskController.markDone(taskId);
+      await taskController.markDone(taskId);
       render();
     } catch (error) {
       alert((error as Error).message);
@@ -1362,7 +1363,7 @@ function bindTaskFormEvents(state: NonNullable<typeof taskFormState>): void {
     render();
   });
 
-  document.getElementById('task-form')?.addEventListener('submit', (event) => {
+  document.getElementById('task-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     const name = (document.getElementById('task-name') as HTMLInputElement).value;
@@ -1376,7 +1377,7 @@ function bindTaskFormEvents(state: NonNullable<typeof taskFormState>): void {
 
     try {
       if (state.mode === 'create') {
-        const created = taskController.create({
+        const created = await taskController.create({
           name,
           description,
           priority,
@@ -1389,7 +1390,7 @@ function bindTaskFormEvents(state: NonNullable<typeof taskFormState>): void {
 
         selectedTaskId = created.id;
       } else {
-        taskController.update(state.taskId, {
+        await taskController.update(state.taskId, {
           name,
           description,
           priority,
@@ -1430,7 +1431,45 @@ function bindNotificationCreatedListener(): void {
   });
 }
 
-activeProjectService.ensureActiveProjectStillExists();
-applyTheme(currentTheme);
-bindNotificationCreatedListener();
-render();
+function renderStartupLoading(): void {
+  app!.innerHTML = `
+    <section class="auth-shell">
+      <article class="auth-card">
+        <h1>Ladowanie aplikacji</h1>
+        <p>Trwa wczytywanie danych.</p>
+      </article>
+    </section>
+  `;
+}
+
+function renderStartupError(error: unknown): void {
+  app!.innerHTML = `
+    <section class="auth-shell">
+      <article class="auth-card">
+        <h1>Blad inicjalizacji danych</h1>
+        <p>${escapeHtml((error as Error).message || 'Nie mozna wczytac danych aplikacji.')}</p>
+      </article>
+    </section>
+  `;
+}
+
+async function bootstrapApp(): Promise<void> {
+  applyTheme(currentTheme);
+  renderStartupLoading();
+
+  if (getConfigurationErrors().length > 0) {
+    render();
+    return;
+  }
+
+  try {
+    await initializeDataServices();
+    activeProjectService.ensureActiveProjectStillExists();
+    bindNotificationCreatedListener();
+    render();
+  } catch (error) {
+    renderStartupError(error);
+  }
+}
+
+void bootstrapApp();

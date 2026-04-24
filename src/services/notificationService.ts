@@ -1,9 +1,9 @@
+import { createRepository } from '../api/repositoryFactory';
 import type { CreateNotificationDTO, Notification, NotificationPriority } from '../types';
-import { LocalStorageApi } from '../api/localStorageApi';
 
 type NotificationListener = (notification: Notification) => void;
 
-const api = new LocalStorageApi<Notification>('notifications');
+const repository = createRepository<Notification>('notifications');
 
 function normalizePriority(value: unknown): NotificationPriority {
     if (value === 'low' || value === 'medium' || value === 'high') {
@@ -42,13 +42,13 @@ export class NotificationService {
     private notifications: Notification[] = [];
     private listeners = new Set<NotificationListener>();
 
-    constructor() {
-        this.notifications = this.load();
+    async init(): Promise<void> {
+        this.notifications = await this.load();
     }
 
-    private load(): Notification[] {
+    private async load(): Promise<Notification[]> {
         try {
-            const raw = api.getAll();
+            const raw = await repository.getAll();
             if (!Array.isArray(raw)) {
                 return [];
             }
@@ -56,16 +56,16 @@ export class NotificationService {
             const normalized = raw
                 .map((item) => normalizeNotification(item))
                 .filter((item) => item.title.length > 0 && item.message.length > 0 && item.recipientId.length > 0);
-            api.setAll(normalized);
+            await repository.setAll(normalized);
             return normalized;
         } catch (error) {
             console.error('Blad wczytywania powiadomien:', error);
-            return [];
+            throw error;
         }
     }
 
-    private save(): void {
-        api.setAll(this.notifications);
+    private async save(): Promise<void> {
+        await repository.setAll(this.notifications);
     }
 
     private emit(notification: Notification): void {
@@ -80,7 +80,7 @@ export class NotificationService {
         };
     }
 
-    create(payload: CreateNotificationDTO): Notification {
+    async create(payload: CreateNotificationDTO): Promise<Notification> {
         const notification = normalizeNotification({
             id: crypto.randomUUID(),
             title: payload.title,
@@ -92,7 +92,7 @@ export class NotificationService {
         });
 
         this.notifications.push(notification);
-        this.save();
+        await this.save();
         this.emit(notification);
         return notification;
     }
@@ -117,7 +117,7 @@ export class NotificationService {
         return this.notifications.filter((notification) => notification.recipientId === recipientId && !notification.isRead).length;
     }
 
-    markAsRead(id: string): Notification | null {
+    async markAsRead(id: string): Promise<Notification | null> {
         const index = this.notifications.findIndex((notification) => notification.id === id);
         if (index === -1) {
             return null;
@@ -132,7 +132,7 @@ export class NotificationService {
             isRead: true,
         };
 
-        this.save();
+        await repository.set(this.notifications[index]);
         return { ...this.notifications[index] };
     }
 }

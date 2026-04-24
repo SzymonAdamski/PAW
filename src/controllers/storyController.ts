@@ -1,6 +1,6 @@
 import { StoryModel } from '../models/story';
 import { StoryService, storyService } from '../services/storyService';
-import type { CreateStoryDTO, UpdateStoryDTO, Story } from '../types';
+import type { CreateStoryDTO, Story, UpdateStoryDTO } from '../types';
 
 export class StoryController {
     private readonly service: StoryService;
@@ -21,26 +21,26 @@ export class StoryController {
         return story;
     }
 
-    create(payload: CreateStoryDTO): Story {
+    async create(payload: CreateStoryDTO): Promise<Story> {
         const errors = StoryModel.validateCreate(payload);
-        if (errors.length > 0) throw new Error('Błąd walidacji: ' + errors.join(' '));
+        if (errors.length > 0) throw new Error('Blad walidacji: ' + errors.join(' '));
         return this.service.create(payload);
     }
 
-    update(id: string, payload: UpdateStoryDTO): Story {
+    async update(id: string, payload: UpdateStoryDTO): Promise<Story> {
         const existing = this.service.getById(id);
         if (!existing) throw new Error('Historyjka o podanym ID nie istnieje.');
 
         const errors = StoryModel.validateUpdate(payload);
-        if (errors.length > 0) throw new Error('Błąd walidacji: ' + errors.join(' '));
+        if (errors.length > 0) throw new Error('Blad walidacji: ' + errors.join(' '));
 
-        const updated = this.service.update(id, payload);
-        if (!updated) throw new Error('Nie można zaktualizować historyjki.');
+        const updated = await this.service.update(id, payload);
+        if (!updated) throw new Error('Nie mozna zaktualizowac historyjki.');
         return updated;
     }
 
-    remove(id: string): void {
-        const deleted = this.service.delete(id);
+    async remove(id: string): Promise<void> {
+        const deleted = await this.service.delete(id);
         if (!deleted) throw new Error('Historyjka o podanym ID nie istnieje.');
     }
 }

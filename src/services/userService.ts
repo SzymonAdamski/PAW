@@ -1,12 +1,11 @@
-import type { GoogleUserProfile, User, UserRole } from '../types';
-import { LocalStorageApi } from '../api/localStorageApi';
+import { createRepository } from '../api/repositoryFactory';
 import { appConfig } from '../config';
+import type { GoogleUserProfile, User, UserRole } from '../types';
 
 const USERS_STORAGE_KEY = 'users';
 const MIGRATION_FLAG_KEY = 'users-migration-v2-done';
 const LEGACY_KEYS_TO_REMOVE = ['mock-users', 'users-list', 'logged-user-state', USERS_STORAGE_KEY];
-
-const api = new LocalStorageApi<User>(USERS_STORAGE_KEY);
+const repository = createRepository<User>(USERS_STORAGE_KEY);
 
 interface UpdateUserAccessDTO {
     role?: UserRole;
@@ -73,12 +72,16 @@ function normalizeUser(raw: Partial<User>): User | null {
 export class UserService {
     private allUsers: User[] = [];
 
-    constructor() {
+    async init(): Promise<void> {
         this.runOneTimeMigration();
-        this.allUsers = this.load();
+        this.allUsers = await this.load();
     }
 
     private runOneTimeMigration(): void {
+        if (appConfig.dataStorage !== 'localStorage') {
+            return;
+        }
+
         if (localStorage.getItem(MIGRATION_FLAG_KEY)) {
             return;
         }
@@ -90,9 +93,9 @@ export class UserService {
         localStorage.setItem(MIGRATION_FLAG_KEY, '1');
     }
 
-    private load(): User[] {
+    private async load(): Promise<User[]> {
         try {
-            const raw = api.getAll();
+            const raw = await repository.getAll();
             if (!Array.isArray(raw)) {
                 return [];
             }
@@ -101,16 +104,16 @@ export class UserService {
                 .map((user) => normalizeUser(user))
                 .filter((user): user is User => user !== null);
 
-            api.setAll(normalized);
+            await repository.setAll(normalized);
             return normalized;
         } catch (error) {
             console.error('Blad wczytywania uzytkownikow:', error);
-            return [];
+            throw error;
         }
     }
 
-    private save(): void {
-        api.setAll(this.allUsers);
+    private async save(): Promise<void> {
+        await repository.setAll(this.allUsers);
     }
 
     private isSuperAdminEmail(email: string): boolean {
@@ -144,7 +147,7 @@ export class UserService {
         return { ...found };
     }
 
-    upsertFromGoogleProfile(profile: GoogleUserProfile): { user: User; isFirstLogin: boolean } {
+    async upsertFromGoogleProfile(profile: GoogleUserProfile): Promise<{ user: User; isFirstLogin: boolean }> {
         const email = normalizeEmail(profile.email);
         const providerUserId = normalizeString(profile.providerUserId);
 
@@ -176,7 +179,7 @@ export class UserService {
             };
 
             this.allUsers[index] = updated;
-            this.save();
+            await repository.set(updated);
             return { user: { ...updated }, isFirstLogin: false };
         }
 
@@ -192,11 +195,11 @@ export class UserService {
         };
 
         this.allUsers.push(created);
-        this.save();
+        await this.save();
         return { user: { ...created }, isFirstLogin: true };
     }
 
-    updateUserAccess(userId: string, payload: UpdateUserAccessDTO): User {
+    async updateUserAccess(userId: string, payload: UpdateUserAccessDTO): Promise<User> {
         const index = this.allUsers.findIndex((user) => user.id === userId);
         if (index === -1) {
             throw new Error('Uzytkownik o podanym ID nie istnieje.');
@@ -210,7 +213,7 @@ export class UserService {
         };
 
         this.allUsers[index] = updated;
-        this.save();
+        await repository.set(updated);
         return { ...updated };
     }
 }

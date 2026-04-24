@@ -1,10 +1,10 @@
 import { TaskModel } from '../models/task';
 import { authService } from '../services/authService';
 import { notificationService } from '../services/notificationService';
-import { TaskService, taskService } from '../services/taskService';
 import { storyService } from '../services/storyService';
+import { TaskService, taskService } from '../services/taskService';
 import { userService } from '../services/userService';
-import type { CreateTaskDTO, UpdateTaskDTO, Task, StoryStatus } from '../types';
+import type { CreateTaskDTO, StoryStatus, Task, UpdateTaskDTO } from '../types';
 
 export class TaskController {
     private readonly service: TaskService;
@@ -33,7 +33,7 @@ export class TaskController {
         return task;
     }
 
-    create(payload: CreateTaskDTO): Task {
+    async create(payload: CreateTaskDTO): Promise<Task> {
         const story = storyService.getById(payload.storyId);
         if (!story) {
             throw new Error('Historyjka o podanym ID nie istnieje.');
@@ -46,13 +46,13 @@ export class TaskController {
 
         this.ensureValidAssignee(payload.assignedToId);
 
-        const created = this.service.create(payload);
-        this.syncStoryStatus(created.storyId);
-        this.notifyStoryOwnerAboutTaskCreated(created.id);
+        const created = await this.service.create(payload);
+        await this.syncStoryStatus(created.storyId);
+        await this.notifyStoryOwnerAboutTaskCreated(created.id);
         return created;
     }
 
-    update(id: string, payload: UpdateTaskDTO): Task {
+    async update(id: string, payload: UpdateTaskDTO): Promise<Task> {
         const existing = this.service.getById(id);
         if (!existing) {
             throw new Error('Zadanie o podanym ID nie istnieje.');
@@ -72,18 +72,18 @@ export class TaskController {
             throw new Error('Zadanie w stanie doing/done musi miec przypisana osobe.');
         }
 
-        const updated = this.service.update(id, payload);
+        const updated = await this.service.update(id, payload);
         if (!updated) {
             throw new Error('Nie mozna zaktualizowac zadania.');
         }
 
-        this.syncStoryStatus(updated.storyId);
-        this.notifyAboutAssigneeChange(existing, updated);
-        this.notifyAboutStatusChange(existing, updated);
+        await this.syncStoryStatus(updated.storyId);
+        await this.notifyAboutAssigneeChange(existing, updated);
+        await this.notifyAboutStatusChange(existing, updated);
         return updated;
     }
 
-    assignUser(id: string, userId: string): Task {
+    async assignUser(id: string, userId: string): Promise<Task> {
         const task = this.service.getById(id);
         if (!task) {
             throw new Error('Zadanie o podanym ID nie istnieje.');
@@ -91,7 +91,7 @@ export class TaskController {
 
         this.ensureValidAssignee(userId);
 
-        const updated = this.service.update(id, {
+        const updated = await this.service.update(id, {
             assignedToId: userId,
             status: 'doing',
         });
@@ -102,16 +102,16 @@ export class TaskController {
 
         const story = storyService.getById(updated.storyId);
         if (story && story.status === 'todo') {
-            storyService.update(story.id, { status: 'doing' });
+            await storyService.update(story.id, { status: 'doing' });
         }
 
-        this.syncStoryStatus(updated.storyId);
-        this.notifyAboutAssigneeChange(task, updated);
-        this.notifyAboutStatusChange(task, updated);
+        await this.syncStoryStatus(updated.storyId);
+        await this.notifyAboutAssigneeChange(task, updated);
+        await this.notifyAboutStatusChange(task, updated);
         return updated;
     }
 
-    markDone(id: string): Task {
+    async markDone(id: string): Promise<Task> {
         const task = this.service.getById(id);
         if (!task) {
             throw new Error('Zadanie o podanym ID nie istnieje.');
@@ -121,29 +121,29 @@ export class TaskController {
             throw new Error('Najpierw przypisz osobe do zadania.');
         }
 
-        const updated = this.service.update(id, { status: 'done' });
+        const updated = await this.service.update(id, { status: 'done' });
         if (!updated) {
             throw new Error('Nie mozna oznaczyc zadania jako done.');
         }
 
-        this.syncStoryStatus(updated.storyId);
-        this.notifyAboutStatusChange(task, updated);
+        await this.syncStoryStatus(updated.storyId);
+        await this.notifyAboutStatusChange(task, updated);
         return updated;
     }
 
-    remove(id: string): void {
+    async remove(id: string): Promise<void> {
         const task = this.service.getById(id);
         if (!task) {
             throw new Error('Zadanie o podanym ID nie istnieje.');
         }
 
-        const deleted = this.service.delete(id);
+        const deleted = await this.service.delete(id);
         if (!deleted) {
             throw new Error('Zadanie o podanym ID nie istnieje.');
         }
 
-        this.syncStoryStatus(task.storyId);
-        this.notifyStoryOwnerAboutTaskRemoved(task);
+        await this.syncStoryStatus(task.storyId);
+        await this.notifyStoryOwnerAboutTaskRemoved(task);
     }
 
     private ensureValidAssignee(userId: string | null | undefined): void {
@@ -165,7 +165,7 @@ export class TaskController {
         }
     }
 
-    private notifyStoryOwnerAboutTaskCreated(taskId: string): void {
+    private async notifyStoryOwnerAboutTaskCreated(taskId: string): Promise<void> {
         const task = this.service.getById(taskId);
         if (!task) {
             return;
@@ -176,7 +176,7 @@ export class TaskController {
             return;
         }
 
-        notificationService.create({
+        await notificationService.create({
             title: 'Nowe zadanie w historyjce',
             message: `Dodano zadanie "${task.name}" do historyjki "${story.name}".`,
             priority: 'medium',
@@ -184,13 +184,13 @@ export class TaskController {
         });
     }
 
-    private notifyStoryOwnerAboutTaskRemoved(task: Task): void {
+    private async notifyStoryOwnerAboutTaskRemoved(task: Task): Promise<void> {
         const story = storyService.getById(task.storyId);
         if (!story || this.shouldSkipRecipient(story.ownerId)) {
             return;
         }
 
-        notificationService.create({
+        await notificationService.create({
             title: 'Usuniecie zadania z historyjki',
             message: `Usunieto zadanie "${task.name}" z historyjki "${story.name}".`,
             priority: 'medium',
@@ -198,7 +198,7 @@ export class TaskController {
         });
     }
 
-    private notifyAboutAssigneeChange(previousTask: Task, updatedTask: Task): void {
+    private async notifyAboutAssigneeChange(previousTask: Task, updatedTask: Task): Promise<void> {
         const previousAssigneeId = previousTask.assignedToId;
         const nextAssigneeId = updatedTask.assignedToId;
 
@@ -208,7 +208,7 @@ export class TaskController {
 
         const story = storyService.getById(updatedTask.storyId);
 
-        notificationService.create({
+        await notificationService.create({
             title: 'Przypisanie osoby do zadania',
             message: story
                 ? `Zadanie "${updatedTask.name}" w historyjce "${story.name}" zostalo do Ciebie przypisane.`
@@ -218,7 +218,7 @@ export class TaskController {
         });
     }
 
-    private notifyAboutStatusChange(previousTask: Task, updatedTask: Task): void {
+    private async notifyAboutStatusChange(previousTask: Task, updatedTask: Task): Promise<void> {
         if (previousTask.status === updatedTask.status) {
             return;
         }
@@ -235,7 +235,7 @@ export class TaskController {
         const priority = updatedTask.status === 'done' ? 'medium' : 'low';
         const statusLabel = updatedTask.status === 'done' ? 'done' : 'doing';
 
-        notificationService.create({
+        await notificationService.create({
             title: 'Zmiana statusu zadania',
             message: `Zadanie "${updatedTask.name}" w historyjce "${story.name}" zmienilo status na ${statusLabel}.`,
             priority,
@@ -252,7 +252,7 @@ export class TaskController {
         return actorId !== null && actorId === recipientId;
     }
 
-    private syncStoryStatus(storyId: string): void {
+    private async syncStoryStatus(storyId: string): Promise<void> {
         const story = storyService.getById(storyId);
         if (!story) {
             return;
@@ -262,7 +262,7 @@ export class TaskController {
         const nextStatus = this.computeStoryStatus(tasks, story.status);
 
         if (nextStatus !== story.status) {
-            storyService.update(story.id, { status: nextStatus });
+            await storyService.update(story.id, { status: nextStatus });
         }
     }
 
