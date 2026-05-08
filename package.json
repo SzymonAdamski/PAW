@@ -5,11 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:e2e": "vite --host 127.0.0.1 --port 5173 --strictPort --mode e2e",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cypress:run": "node scripts/run-cypress.mjs run",
+    "cypress:open": "node scripts/run-cypress.mjs open",
+    "test:e2e": "node scripts/run-e2e.mjs run",
+    "test:e2e:open": "node scripts/run-e2e.mjs open"
   },
   "devDependencies": {
     "@types/uuid": "^10.0.0",
+    "cypress": "^14.3.3",
     "typescript": "~5.9.3",
     "vite": "^7.3.1"
   },

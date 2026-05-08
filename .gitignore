@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 .env
+cypress/screenshots/
+cypress/videos/
+cypress/downloads/
+test-results/
 
 # Editor directories and files
 .vscode/*
